@@ -239,7 +239,7 @@ class ServiceController:
             if self.debug:
                 logger.debug(f"MQTT Log: {buf}")
 
-        client = mqtt_client.Client(self.client_id)
+        client = mqtt_client.Client(client_id=self.client_id, protocol=mqtt_client.MQTTv311)
         client.username_pw_set(self.username, self.password)
         client.on_connect = on_connect
         client.on_disconnect = on_disconnect
