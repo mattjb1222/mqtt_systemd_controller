@@ -36,9 +36,9 @@ class ServiceController:
 
     def __init__(self, debug=False, log_file: Optional[str] = None):
         # Configuration from environment variables
-        self.broker = os.getenv('MQTT_BROKER', '192.168.7.50')
+        self.broker = os.getenv('MQTT_BROKER')
         self.port = int(os.getenv('MQTT_PORT', 1883))
-        self.topic = os.getenv('MQTT_TOPIC', 'picam/systemd/mediamtx')
+        self.topic = os.getenv('MQTT_TOPIC')
         self.client_id = f'subscribe-{random.randint(0, 100)}'
         self.username = os.getenv('MQTT_USER')
         self.password = os.getenv('MQTT_PASS')
@@ -52,8 +52,8 @@ class ServiceController:
         self.topics = [topic.strip() for topic in self.topic.split(',')] if ',' in self.topic else [self.topic]
 
         # Validate required environment variables
-        if not self.username or not self.password:
-            logger.error("MQTT_USER and MQTT_PASS must be set in environment variables")
+        if not self.username or not self.password or not self.broker:
+            logger.error("MQTT_USER, MQTT_PASS, MQTT_BROKER, and MQTT_TOPIC must be set in environment variables")
             sys.exit(1)
 
         logger.info(f"Configuration loaded - Broker: {self.broker}:{self.port}")
@@ -239,7 +239,11 @@ class ServiceController:
             if self.debug:
                 logger.debug(f"MQTT Log: {buf}")
 
-        client = mqtt_client.Client(client_id=self.client_id, protocol=mqtt_client.MQTTv311)
+        client = mqtt_client.Client(
+            mqtt_client.CallbackAPIVersion.VERSION1,
+            client_id=self.client_id,
+            protocol=mqtt_client.MQTTv311
+        )
         client.username_pw_set(self.username, self.password)
         client.on_connect = on_connect
         client.on_disconnect = on_disconnect
