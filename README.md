@@ -4,7 +4,7 @@ An enhanced MQTT-based systemd service controller that manages systemd services 
 
 ## Features
 
-- **MQTT Integration**: Connects to MQTT broker to receive service control commands
+- **MQTT Integration**: Connects to MQTT broker (version 2 API) to receive service control commands
 - **Systemd Service Management**: Start, stop, and monitor systemd services
 - **Polling**: Periodic state checking and publishing
 - **Manual Change Detection**: Detects and reports manual service state changes

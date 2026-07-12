@@ -98,8 +98,8 @@ class ServiceController:
 
     def connect_mqtt(self) -> mqtt_client.Client:
         """Connect to MQTT broker with proper reconnection handling and error recovery"""
-        def on_connect(client, userdata, flags, rc):
-            if rc == 0:
+        def on_connect(client, userdata, flags, reason_code, properties):
+            if reason_code == 0:
                 logger.info("Connected to MQTT Broker!")
                 self.mqtt_connection_failure_count = 0  # Reset failure counter on success
                 # Subscribe to all topics
@@ -111,7 +111,7 @@ class ServiceController:
                         logger.error(f"Failed to subscribe to topic {topic}: {e}")
                         return
             else:
-                logger.error("Failed to connect, return code %d", rc)
+                logger.error("Failed to connect, reason code %d", reason_code)
                 self.mqtt_connection_failure_count += 1
                 if self.mqtt_connection_failure_count >= self.max_mqtt_failures:
                     logger.critical(f"Max MQTT connection failures reached ({self.max_mqtt_failures}), exiting")
@@ -120,14 +120,14 @@ class ServiceController:
                     logger.warning(f"MQTT connection failed, attempt {self.mqtt_connection_failure_count}/{self.max_mqtt_failures}")
                 return
 
-        def on_disconnect(client, userdata, rc):
-            logger.info("Disconnected from MQTT Broker, rc: %d", rc)
+        def on_disconnect(client, userdata, flags, reason_code, properties):
+            logger.info("Disconnected from MQTT Broker, reason code: %s", reason_code)
             self.mqtt_connection_failure_count += 1
-            if rc != 0:
+            if reason_code != 0:
                 logger.warning("Unexpected MQTT disconnection, will attempt reconnection")
 
-        def on_subscribe(client, userdata, mid, granted_qos):
-            logger.info(f"Subscribed successfully, mid: {mid}, qos: {granted_qos}")
+        def on_subscribe(client, userdata, mid, reason_code, properties):
+            logger.info(f"Subscribed successfully, mid: {mid}, reason_code: {reason_code}")
 
         def on_message(client, userdata, msg):
             # Check if this is a duplicate message by checking timestamp
@@ -240,7 +240,7 @@ class ServiceController:
                 logger.debug(f"MQTT Log: {buf}")
 
         client = mqtt_client.Client(
-            mqtt_client.CallbackAPIVersion.VERSION1,
+            callback_api_version=mqtt_client.CallbackAPIVersion.VERSION2,
             client_id=self.client_id,
             protocol=mqtt_client.MQTTv311
         )
