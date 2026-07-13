@@ -66,7 +66,7 @@ uv run mqtt_systemd_controller.py [--debug] [--log-file /path/to/logfile]
 {
   "hostname": "your-hostname",
   "service": "service-name",
-  "state": "start|stop|started|stopped"
+  "state": "start|stop|started|stopped|enable|disable|enabled|disabled"
 }
 ```
 

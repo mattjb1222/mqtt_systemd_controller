@@ -201,17 +201,21 @@ class ServiceController:
                 self._execute_command(msg_json['command'])
 
             # Handle service state changes
-            elif msg_json.get('service') and msg_json.get('state') in ['start', 'stop', 'started', 'stopped']:
+            elif msg_json.get('service') and msg_json.get('state') in ['start', 'stop', 'started', 'stopped', 'enable', 'disable', 'enabled', 'disabled']:
                 service = msg_json['service']
 
                 # Convert state to command format for internal processing
                 # If we receive "started" or "stopped", convert to "start" or "stop" for command execution
+                # If we receive "enabled" or "disabled", convert to "enable" or "disable" for command execution
+                state = msg_json['state']
                 if msg_json['state'] == 'started':
                     state = 'start'
                 elif msg_json['state'] == 'stopped':
                     state = 'stop'
-                else:
-                    state = msg_json['state']
+                elif msg_json['state'] == 'enabled':
+                    state = 'enable'
+                elif msg_json['state'] == 'disabled':
+                    state = 'disable'
 
                 logger.info(f"Processing service state change: {service} -> {state}")
 
@@ -316,6 +320,28 @@ class ServiceController:
             logger.error("Failed to get systemd status for %s: %s", service, e)
             return False, 1
 
+    def _get_systemd_enabled_status(self, service: str) -> Tuple[bool, int]:
+        """Get systemd enabled status for a service (True = enabled, False = disabled) with error handling"""
+        systemd_command = ["/usr/bin/systemctl", "is-enabled", "--quiet", service]
+        try:
+            if self.debug:
+                logger.debug(f"Checking systemd enabled status for {service}")
+            child = Popen(systemd_command, stdout=PIPE, stderr=PIPE)
+            out, err = child.communicate()
+            rc = child.returncode
+
+            # systemctl is-enabled --quiet returns:
+            # 0 = enabled
+            # 1 = disabled
+            # We consider 0 as "enabled" and 1 as "disabled"
+            is_enabled = (rc == 0)
+            if self.debug:
+                logger.debug(f"Systemd enabled status for {service}: rc={rc}, is_enabled={is_enabled}")
+            return is_enabled, rc
+        except Exception as e:
+            logger.error("Failed to get systemd enabled status for %s: %s", service, e)
+            return False, 1
+
     def check_systemd_status(self, client: mqtt_client.Client):
         """Check systemd status and apply desired state changes with enhanced error handling"""
         for service in list(self.services.keys()):
@@ -335,11 +361,6 @@ class ServiceController:
                 # Fallback to default topic pattern
                 topic = f'picam/systemd/{service}'
 
-            # Check current systemd status
-            is_active, rc = self._get_systemd_status(service)
-            if self.debug:
-                logger.debug(f"Systemd status for {service}: rc={rc}, is_active={is_active}")
-
             # Get desired state and changed flag inside lock
             with self.lock:
                 desired_state = self.services[service]
@@ -351,28 +372,73 @@ class ServiceController:
                     logger.debug(f"No changes needed for {service}")
                 continue
 
-            # Apply desired state based on systemd status
-            if is_active and desired_state == 'stop':
-                # Service is running, should be stopped
-                self._apply_service_state(client, service, 'stop', topic)
-            elif not is_active and desired_state == 'start':
-                # Service is stopped, should be started
-                self._apply_service_state(client, service, 'start', topic)
-            elif is_active and desired_state == 'start':
-                # Service is already running
-                with self.lock:
-                    self.changed[service] = False
+            # For enable/disable commands, we need to check the enabled status
+            if desired_state in ['enable', 'disable']:
+                is_enabled, rc = self._get_systemd_enabled_status(service)
                 if self.debug:
-                    logger.info(f"Service {service} already running, no action needed")
-            elif not is_active and desired_state == 'stop':
-                # Service is already stopped
-                with self.lock:
-                    self.changed[service] = False
+                    logger.debug(f"Current enabled status for {service}: is_enabled={is_enabled}, rc={rc}")
+
+                # Apply desired state based on current enabled status
+                if desired_state == 'enable' and not is_enabled:
+                    # Service is disabled, should be enabled
+                    self._apply_service_state(client, service, 'enable', topic)
+                elif desired_state == 'disable' and is_enabled:
+                    # Service is enabled, should be disabled
+                    self._apply_service_state(client, service, 'disable', topic)
+                elif desired_state == 'enable' and is_enabled:
+                    # Service is already enabled
+                    with self.lock:
+                        self.changed[service] = False
+                    if self.debug:
+                        logger.info(f"Service {service} already enabled, no action needed")
+                elif desired_state == 'disable' and not is_enabled:
+                    # Service is already disabled
+                    with self.lock:
+                        self.changed[service] = False
+                    if self.debug:
+                        logger.info(f"Service {service} already disabled, no action needed")
+            else:
+                # Check current systemd status for start/stop commands
+                is_active, rc = self._get_systemd_status(service)
                 if self.debug:
-                    logger.info(f"Service {service} already stopped, no action needed")
+                    logger.debug(f"Systemd status for {service}: rc={rc}, is_active={is_active}")
+
+                # Apply desired state based on systemd status
+                if is_active and desired_state == 'stop':
+                    # Service is running, should be stopped
+                    self._apply_service_state(client, service, 'stop', topic)
+                elif not is_active and desired_state == 'start':
+                    # Service is stopped, should be started
+                    self._apply_service_state(client, service, 'start', topic)
+                elif is_active and desired_state == 'start':
+                    # Service is already running
+                    with self.lock:
+                        self.changed[service] = False
+                    if self.debug:
+                        logger.info(f"Service {service} already running, no action needed")
+                elif not is_active and desired_state == 'stop':
+                    # Service is already stopped
+                    with self.lock:
+                        self.changed[service] = False
+                    if self.debug:
+                        logger.info(f"Service {service} already stopped, no action needed")
 
     def _apply_service_state(self, client: mqtt_client.Client, service: str, desired_state: str, topic: str):
         """Apply the desired service state with enhanced error handling"""
+        # For enable/disable commands, we need to check current enabled status first
+        if desired_state in ['enable', 'disable']:
+            is_enabled, rc = self._get_systemd_enabled_status(service)
+            if self.debug:
+                logger.debug(f"Current enabled status for {service}: is_enabled={is_enabled}, rc={rc}")
+
+            # If we're trying to enable a service that's already enabled, or disable one that's already disabled
+            if (desired_state == 'enable' and is_enabled) or (desired_state == 'disable' and not is_enabled):
+                with self.lock:
+                    self.changed[service] = False
+                if self.debug:
+                    logger.info(f"Service {service} already {desired_state}d, no action needed")
+                return
+
         systemd_command = ["/usr/bin/sudo", "/usr/bin/systemctl", desired_state, service]
 
         try:
@@ -394,7 +460,13 @@ class ServiceController:
             self.changed[service] = False
 
         # Publish status update
-        state = "started" if desired_state == "start" else "stopped"
+        if desired_state in ['start', 'stop']:
+            state = "started" if desired_state == "start" else "stopped"
+        elif desired_state in ['enable', 'disable']:
+            state = "enabled" if desired_state == "enable" else "disabled"
+        else:
+            state = desired_state
+
         msg = json.dumps({
             "hostname": socket.gethostname(),
             "service": service,
