@@ -1,14 +1,32 @@
 #!/usr/bin/env python3
 """
 Parallel launcher for MQTT systemd controllers
-This script runs both the start/stop controller and enable/disable controller in parallel threads
+Runs the start/stop, enable/disable, and command executor controllers in parallel.
+By default all three are launched; use --start-stop, --enable-disable, and
+--command-executor to select a subset.
 """
 import sys
 import subprocess
 import time
 import os
 
-def graceful_stop(process, label, timeout=2):
+CONTROLLERS = {
+    "start_stop": {
+        "script": "mqtt_systemd_start_stop.py",
+        "label": "Start/Stop Controller",
+    },
+    "enable_disable": {
+        "script": "mqtt_systemd_enable_disable.py",
+        "label": "Enable/Disable Controller",
+    },
+    "command_executor": {
+        "script": "mqtt_command_executor.py",
+        "label": "Command Executor",
+    },
+}
+
+
+def graceful_stop(process, label, timeout=10):
     """Terminate a process gracefully, escalating to kill if needed."""
     if process is None or process.poll() is not None:
         return  # Already stopped
@@ -39,58 +57,71 @@ def run_controller(script_path, controller_name, debug=False, verbose=False):
         print(f"Error starting {controller_name}: {e}")
         return None
 
-def main():
-    """Main function to run both controllers in parallel"""
-    # Check if we're running in debug or verbose mode
-    debug = '--debug' in sys.argv
-    verbose = '--verbose' in sys.argv
 
-    # Get the directory where this script is located
+def parse_flags(argv):
+    """Determine which controllers to run based on CLI flags.
+
+    If any of --start-stop, --enable-disable, or --command-executor is given,
+    only the specified controllers are launched.  If none are given, all three
+    run by default.
+    """
+    debug = '--debug' in argv
+    verbose = '--verbose' in argv
+
+    select_keys = {
+        "--start-stop": "start_stop",
+        "--enable-disable": "enable_disable",
+        "--command-executor": "command_executor",
+    }
+    requested = [key for flag, key in select_keys.items() if flag in argv]
+
+    if requested:
+        return debug, verbose, requested
+    return debug, verbose, list(CONTROLLERS.keys())
+
+
+def main():
+    """Main function to run controllers in parallel"""
+    debug, verbose, controller_keys = parse_flags(sys.argv)
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Define the controller scripts
-    start_stop_script = os.path.join(script_dir, 'mqtt_systemd_start_stop.py')
-    enable_disable_script = os.path.join(script_dir, 'mqtt_systemd_enable_disable.py')
+    # Build the list of (label, process) tuples
+    processes = []
 
-    # Validate that both scripts exist
-    if not os.path.exists(start_stop_script):
-        print(f"Error: Start/stop controller script not found at {start_stop_script}")
-        sys.exit(1)
+    for key in controller_keys:
+        info = CONTROLLERS[key]
+        script_path = os.path.join(script_dir, info["script"])
 
-    if not os.path.exists(enable_disable_script):
-        print(f"Error: Enable/disable controller script not found at {enable_disable_script}")
-        sys.exit(1)
+        if not os.path.exists(script_path):
+            print(f"Error: {info['label']} script not found at {script_path}")
+            sys.exit(1)
 
-    print("Starting parallel MQTT systemd controllers...")
+        proc = run_controller(script_path, info["label"], debug, verbose)
+        if proc is None:
+            print(f"Failed to start {info['label']}")
+            sys.exit(1)
+        processes.append((info["label"], proc))
 
-    # Start both controllers in separate threads
-    start_stop_process = run_controller(start_stop_script, "Start/Stop Controller", debug, verbose)
-    enable_disable_process = run_controller(enable_disable_script, "Enable/Disable Controller", debug, verbose)
-
-    if not start_stop_process or not enable_disable_process:
-        print("Failed to start one or both controllers")
-        sys.exit(1)
-
-    print("Both controllers started successfully")
-    print("Press Ctrl+C to stop both controllers")
+    print(f"{len(processes)} controller(s) started successfully")
+    print("Press Ctrl+C to stop all controllers")
 
     try:
-        # Wait for both processes to complete
         while True:
-            # Check if processes are still running
-            start_stop_running = start_stop_process.poll() is None
-            enable_disable_running = enable_disable_process.poll() is None
+            running = [(label, p) for label, p in processes if p.poll() is None]
 
-            if not start_stop_running and not enable_disable_running:
-                print("Both controllers have stopped")
+            if not running:
+                print("All controllers have stopped")
                 break
-            elif not start_stop_running:
-                print("Start/Stop controller has stopped")
-                graceful_stop(enable_disable_process, "Enable/Disable Controller")
-                break
-            elif not enable_disable_running:
-                print("Enable/Disable controller has stopped")
-                graceful_stop(start_stop_process, "Start/Stop Controller")
+
+            # If any controller stopped early, log it and bring the others down
+            stopped = [label for label, p in processes if p.poll() is not None]
+            for label in stopped:
+                print(f"{label} has stopped")
+
+            if len(running) < len(processes):
+                for label, p in running:
+                    graceful_stop(p, label)
                 break
 
             time.sleep(1)
@@ -98,15 +129,16 @@ def main():
     except KeyboardInterrupt:
         print("\nShutting down controllers...")
         try:
-            graceful_stop(start_stop_process, "Start/Stop Controller")
-            graceful_stop(enable_disable_process, "Enable/Disable Controller")
+            for label, proc in processes:
+                graceful_stop(proc, label)
             print("Shutdown complete")
         except Exception as e:
             print(f"Error during shutdown: {e}")
     finally:
         # Reap any remaining zombie processes
-        start_stop_process.wait()
-        enable_disable_process.wait()
+        for _label, proc in processes:
+            proc.wait()
+
 
 if __name__ == '__main__':
     main()

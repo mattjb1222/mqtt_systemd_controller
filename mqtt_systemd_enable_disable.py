@@ -579,8 +579,6 @@ class EnableDisableController:
         # when the signal fires while the logging module already holds its lock.
         def signal_handler(sig, frame):
             self._shutdown_requested = True
-            if self.client:
-                self.client.loop_stop()
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
@@ -614,15 +612,15 @@ class EnableDisableController:
         self.manual_change_thread.daemon = True
         self.manual_change_thread.start()
 
-        # Start listening for messages
+        # Start listening for messages using loop_start() so the main thread
+        # remains responsive to signals (loop_forever() blocks in select() and
+        # can miss or swallow SIGINT/SIGTERM).
         logger.info("Starting MQTT listener...")
+        self.client.loop_start()
         try:
-            self.client.loop_forever()
-        except KeyboardInterrupt:
-            logger.info("Received keyboard interrupt, shutting down...")
-
-        # Cleanup runs on the main thread — safe to use logger
-        if self._shutdown_requested or self.stop_polling:
+            while not self._shutdown_requested:
+                time.sleep(1)
+        finally:
             self._shutdown()
 
 def main():

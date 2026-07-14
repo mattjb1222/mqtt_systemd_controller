@@ -8,7 +8,8 @@ The system is split into two specialized controllers to better manage different 
 
 1. **Start/Stop Controller** (`mqtt_systemd_start_stop.py`) - Handles start/stop commands for systemd services
 2. **Enable/Disable Controller** (`mqtt_systemd_enable_disable.py`) - Handles enable/disable commands for systemd services
-3. **Parallel Launcher** (`run_parallel_controllers.py`) - Runs both controllers in parallel threads
+3. **Command Executor** (`mqtt_command_executor.py`) - Executes arbitrary shell commands sent via MQTT
+4. **Parallel Launcher** (`run_parallel_controllers.py`) - Runs all controllers in parallel
 
 ## Features
 
@@ -75,11 +76,22 @@ To run the enable/disable controller:
 python mqtt_systemd_enable_disable.py [--verbose] [--debug] [--log-file /path/to/logfile]
 ```
 
-### Running Both Controllers in Parallel
+To run the command executor:
+```bash
+python mqtt_command_executor.py [--verbose] [--debug] [--log-file /path/to/logfile]
+```
 
-To run both controllers in parallel:
+### Running Controllers in Parallel
+
+To run all three controllers:
 ```bash
 python run_parallel_controllers.py [--verbose] [--debug]
+```
+
+To run a subset of controllers:
+```bash
+python run_parallel_controllers.py --start-stop --enable-disable
+python run_parallel_controllers.py --command-executor
 ```
 
 ### Command-Line Flags
@@ -89,6 +101,11 @@ python run_parallel_controllers.py [--verbose] [--debug]
 | `--verbose` | Show all INFO-level messages (config, subscriptions, publish confirmations) |
 | `--debug` | Show full DEBUG-level trace output |
 | `--log-file <path>` | Write logs to the specified file in addition to stdout |
+| `--start-stop` | Run only the start/stop controller (combine with others for a subset) |
+| `--enable-disable` | Run only the enable/disable controller |
+| `--command-executor` | Run only the command executor |
+
+When no controller flags are given, all three controllers run. When one or more controller flags are given, only the specified controllers are launched.
 
 ## Message Format
 
@@ -104,10 +121,24 @@ python run_parallel_controllers.py [--verbose] [--debug]
 
 ### Command Execution
 
+Send a command to the command executor:
+
 ```json
 {
   "hostname": "your-hostname",
   "command": "command-to-execute"
+}
+```
+
+The executor runs the command and publishes the result back to the same topic:
+
+```json
+{
+  "hostname": "your-hostname",
+  "command": "command-to-execute",
+  "return_code": 0,
+  "stdout": "output here",
+  "stderr": ""
 }
 ```
 
