@@ -8,7 +8,7 @@ import subprocess
 import time
 import os
 
-def graceful_stop(process, label, timeout=3):
+def graceful_stop(process, label, timeout=2):
     """Terminate a process gracefully, escalating to kill if needed."""
     if process is None or process.poll() is not None:
         return  # Already stopped
