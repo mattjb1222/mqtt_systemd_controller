@@ -67,20 +67,28 @@ Set the following environment variables:
 
 To run the start/stop controller:
 ```bash
-python mqtt_systemd_start_stop.py [--debug] [--log-file /path/to/logfile]
+python mqtt_systemd_start_stop.py [--verbose] [--debug] [--log-file /path/to/logfile]
 ```
 
 To run the enable/disable controller:
 ```bash
-python mqtt_systemd_enable_disable.py [--debug] [--log-file /path/to/logfile]
+python mqtt_systemd_enable_disable.py [--verbose] [--debug] [--log-file /path/to/logfile]
 ```
 
 ### Running Both Controllers in Parallel
 
 To run both controllers in parallel:
 ```bash
-python run_parallel_controllers.py [--debug]
+python run_parallel_controllers.py [--verbose] [--debug]
 ```
+
+### Command-Line Flags
+
+| Flag | Description |
+|---|---|
+| `--verbose` | Show all INFO-level messages (config, subscriptions, publish confirmations) |
+| `--debug` | Show full DEBUG-level trace output |
+| `--log-file <path>` | Write logs to the specified file in addition to stdout |
 
 ## Message Format
 
@@ -161,6 +169,16 @@ sudo systemctl start mqtt_systemd_controller
 ## Logging
 
 The controller logs to stdout by default. Use `--log-file` to specify a log file for persistent logging.
+
+There are three logging verbosity levels:
+
+| Mode | Level | What you see |
+|---|---|---|
+| **default** (no flags) | WARNING | Errors, warnings, and key operational messages (connection status, service actions, command execution) |
+| `--verbose` | INFO | Everything above plus config dump, subscription confirmations, publish confirmations, state sync details |
+| `--debug` | DEBUG | Full trace: message deduplication, hostname checks, internal state changes |
+
+In quiet mode (default), the controller still shows important INFO messages such as MQTT connection/disconnection, service state changes, and manual change detection — these are always visible regardless of log level.
 
 ## Error Handling
 

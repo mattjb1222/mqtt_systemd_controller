@@ -4,20 +4,36 @@ Parallel launcher for MQTT systemd controllers
 This script runs both the start/stop controller and enable/disable controller in parallel threads
 """
 import sys
-import threading
+import subprocess
 import time
 import os
-from subprocess import Popen
 
-def run_controller(script_path, controller_name, debug=False):
+def graceful_stop(process, label, timeout=3):
+    """Terminate a process gracefully, escalating to kill if needed."""
+    if process is None or process.poll() is not None:
+        return  # Already stopped
+    print(f"Stopping {label}...")
+    process.terminate()
+    try:
+        process.wait(timeout=timeout)
+        print(f"{label} stopped gracefully")
+    except subprocess.TimeoutExpired:
+        print(f"{label} did not stop in {timeout}s, killing...")
+        process.kill()
+        process.wait()  # Reap zombie
+
+
+def run_controller(script_path, controller_name, debug=False, verbose=False):
     """Run a controller script in a separate process"""
     try:
         cmd = [sys.executable, script_path]
         if debug:
             cmd.append('--debug')
+        if verbose:
+            cmd.append('--verbose')
 
         print(f"Starting {controller_name}...")
-        process = Popen(cmd)
+        process = subprocess.Popen(cmd)
         return process
     except Exception as e:
         print(f"Error starting {controller_name}: {e}")
@@ -25,8 +41,9 @@ def run_controller(script_path, controller_name, debug=False):
 
 def main():
     """Main function to run both controllers in parallel"""
-    # Check if we're running in debug mode
+    # Check if we're running in debug or verbose mode
     debug = '--debug' in sys.argv
+    verbose = '--verbose' in sys.argv
 
     # Get the directory where this script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -47,8 +64,8 @@ def main():
     print("Starting parallel MQTT systemd controllers...")
 
     # Start both controllers in separate threads
-    start_stop_process = run_controller(start_stop_script, "Start/Stop Controller", debug)
-    enable_disable_process = run_controller(enable_disable_script, "Enable/Disable Controller", debug)
+    start_stop_process = run_controller(start_stop_script, "Start/Stop Controller", debug, verbose)
+    enable_disable_process = run_controller(enable_disable_script, "Enable/Disable Controller", debug, verbose)
 
     if not start_stop_process or not enable_disable_process:
         print("Failed to start one or both controllers")
@@ -69,11 +86,11 @@ def main():
                 break
             elif not start_stop_running:
                 print("Start/Stop controller has stopped")
-                enable_disable_process.terminate()  # Terminate the other one
+                graceful_stop(enable_disable_process, "Enable/Disable Controller")
                 break
             elif not enable_disable_running:
                 print("Enable/Disable controller has stopped")
-                start_stop_process.terminate()  # Terminate the other one
+                graceful_stop(start_stop_process, "Start/Stop Controller")
                 break
 
             time.sleep(1)
@@ -81,13 +98,15 @@ def main():
     except KeyboardInterrupt:
         print("\nShutting down controllers...")
         try:
-            start_stop_process.terminate()
-            enable_disable_process.terminate()
-            start_stop_process.wait()
-            enable_disable_process.wait()
-            print("Controllers stopped successfully")
+            graceful_stop(start_stop_process, "Start/Stop Controller")
+            graceful_stop(enable_disable_process, "Enable/Disable Controller")
+            print("Shutdown complete")
         except Exception as e:
             print(f"Error during shutdown: {e}")
+    finally:
+        # Reap any remaining zombie processes
+        start_stop_process.wait()
+        enable_disable_process.wait()
 
 if __name__ == '__main__':
     main()

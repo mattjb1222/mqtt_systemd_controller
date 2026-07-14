@@ -17,16 +17,56 @@ from subprocess import PIPE, Popen, CalledProcessError
 import shlex
 from paho.mqtt import client as mqtt_client
 
-# Configure logging with file output for debugging
-def setup_logging(debug=False, log_file: Optional[str] = None):
-    level = logging.DEBUG if debug else logging.INFO
-    handlers = [logging.StreamHandler(sys.stdout)]
+# INFO-level messages that should always appear, even in quiet (non-verbose) mode.
+# Matched as substrings against the formatted log message.
+_IMPORTANT_INFO = [
+    "Connected to MQTT Broker",
+    "Disconnected from MQTT Broker",
+    "Processing command",
+    "Processing service state change",
+    "Executing command",
+    "Command result",
+    "Applying",
+    "Manual state change detected",
+]
 
+
+class AlwaysShowImportantFilter(logging.Filter):
+    """Let WARNING+ through always, plus INFO messages that look important."""
+
+    def filter(self, record):
+        if record.levelno >= logging.WARNING:
+            return True
+        if record.levelno >= logging.INFO:
+            for keyword in _IMPORTANT_INFO:
+                if keyword in record.getMessage():
+                    return True
+        return record.levelno >= self._min_level
+
+    def __init__(self, min_level):
+        super().__init__()
+        self._min_level = min_level
+
+
+def setup_logging(debug=False, verbose=False, log_file: Optional[str] = None):
+    if debug:
+        level = logging.DEBUG
+    elif verbose:
+        level = logging.INFO
+    else:
+        level = logging.WARNING
+
+    stream = logging.StreamHandler(sys.stdout)
+    stream.addFilter(AlwaysShowImportantFilter(level))
+
+    handlers = [stream]
     if log_file:
         handlers.append(logging.FileHandler(log_file))
 
+    # Set the root level to DEBUG so all records reach handlers — the handler
+    # filter (AlwaysShowImportantFilter) is what actually gates output.
     logging.basicConfig(
-        level=level,
+        level=logging.DEBUG,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=handlers
     )
@@ -89,6 +129,7 @@ class StartStopController:
         self.manual_change_thread = None
         self.stop_polling = False
         self.stop_manual_check = False
+        self._shutdown_requested = False
 
         # MQTT client
         self.client: mqtt_client.Client = None
@@ -521,27 +562,30 @@ class StartStopController:
         except Exception as e:
             logger.error(f"Initial systemd check failed: {e}")
 
+    def _shutdown(self):
+        """Perform graceful shutdown — must be called from the main thread."""
+        logger.info('Shutting down gracefully...')
+        self.stop_polling = True
+        self.stop_manual_check = True
+
+        # Polling/manual threads are daemon threads — Python will clean them up
+        # when the main thread exits.  Don't block waiting for them; the MQTT
+        # disconnect is the important part of graceful shutdown.
+        if self.client:
+            try:
+                self.client.disconnect()
+            except Exception as e:
+                logger.error(f"Error during MQTT disconnect: {e}")
+
     def run(self):
         """Main execution loop with enhanced error handling and graceful shutdown"""
-        # Setup signal handling for graceful shutdown
+        # Setup signal handling for graceful shutdown.
+        # Keep the handler minimal (no logging!) to avoid reentrant-call errors
+        # when the signal fires while the logging module already holds its lock.
         def signal_handler(sig, frame):
-            logger.info('Shutting down gracefully...')
-            self.stop_polling = True
-            self.stop_manual_check = True
-
-            # Wait for threads to finish gracefully
-            if self.polling_thread:
-                self.polling_thread.join(timeout=5)
-            if self.manual_change_thread:
-                self.manual_change_thread.join(timeout=5)
-
+            self._shutdown_requested = True
             if self.client:
-                try:
-                    self.client.disconnect()
-                except Exception as e:
-                    logger.error(f"Error during MQTT disconnect: {e}")
-
-            sys.exit(0)
+                self.client.loop_stop()
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
@@ -581,15 +625,16 @@ class StartStopController:
             self.client.loop_forever()
         except KeyboardInterrupt:
             logger.info("Received keyboard interrupt, shutting down...")
-            signal_handler(signal.SIGINT, None)
-        except Exception as e:
-            logger.error(f"MQTT loop error: {e}")
-            signal_handler(signal.SIGTERM, None)
+
+        # Cleanup runs on the main thread — safe to use logger
+        if self._shutdown_requested or self.stop_polling:
+            self._shutdown()
 
 def main():
     """Main entry point"""
     # Parse command line arguments
     debug = '--debug' in sys.argv
+    verbose = '--verbose' in sys.argv
     log_file = None
 
     # Check for log file argument
@@ -599,7 +644,7 @@ def main():
             break
 
     global logger
-    logger = setup_logging(debug, log_file)
+    logger = setup_logging(debug, verbose, log_file)
     logger.info("Starting Start/Stop Controller")
 
     try:
