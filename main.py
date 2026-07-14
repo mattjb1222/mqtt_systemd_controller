@@ -4,7 +4,7 @@ Main entry point for MQTT systemd controller
 """
 
 def main():
-    print("MQTT Systemd Controller - Run with 'python mqtt_systemd_controller.py' to start the service")
+    print("MQTT Systemd Controller - Run with 'python mqtt_systemd_start_stop.py' to start the service")
 
 
 if __name__ == "__main__":

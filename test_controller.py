@@ -9,12 +9,12 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from mqtt_systemd_controller import ServiceController
-    print("✓ Successfully imported ServiceController")
+    from mqtt_systemd_start_stop import StartStopController
+    print("✓ Successfully imported StartStopController")
 
     # Test instantiation (without actual MQTT connection)
-    controller = ServiceController(debug=False)
-    print("✓ Successfully instantiated ServiceController")
+    controller = StartStopController(debug=False)
+    print("✓ Successfully instantiated StartStopController")
 
     # Test basic configuration
     print(f"✓ Broker: {controller.broker}")

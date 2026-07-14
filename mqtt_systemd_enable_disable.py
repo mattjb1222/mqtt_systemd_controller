@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-MQTT-based systemd service controller with enhanced polling, race condition handling, and error recovery
+MQTT-based systemd service enable/disable controller
+This script handles only enable/disable commands for systemd services
 """
 import logging
 import os
@@ -12,7 +13,7 @@ import sys
 import time
 from typing import Dict, Tuple, Any, Optional
 from threading import Thread, Lock
-from subprocess import PIPE, Popen, CalledProcessError
+from subprocess import PIPE, Popen
 import shlex
 from paho.mqtt import client as mqtt_client
 
@@ -29,10 +30,10 @@ def setup_logging(debug=False, log_file: Optional[str] = None):
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=handlers
     )
-    return logging.getLogger(__name__)
+    return logging.getLogger("EnableDisableController")
 
-class ServiceController:
-    """Enhanced MQTT-based systemd service controller with robust error handling and race condition protection"""
+class EnableDisableController:
+    """MQTT-based systemd service enable/disable controller with robust error handling"""
 
     def __init__(self, debug=False, log_file: Optional[str] = None):
         # Configuration from environment variables
@@ -153,14 +154,14 @@ class ServiceController:
 
             self.last_message_time = current_time
 
-            logger.info(f"=== MESSAGE RECEIVED ===")
-            logger.info(f"Topic: {msg.topic}")
-            logger.info(f"Payload: {msg.payload.decode()}")
-            logger.info(f"Message size: {len(msg.payload)} bytes")
+            logger.debug(f"=== MESSAGE RECEIVED ===")
+            logger.debug(f"Topic: {msg.topic}")
+            logger.debug(f"Payload: {msg.payload.decode()}")
+            logger.debug(f"Message size: {len(msg.payload)} bytes")
 
             try:
                 msg_json = json.loads(msg.payload.decode())
-                logger.info(f"Parsed JSON: {msg_json}")
+                logger.debug(f"Parsed JSON: {msg_json}")
             except json.JSONDecodeError as e:
                 logger.error("Failed to decode JSON: %s", e)
                 return
@@ -182,42 +183,32 @@ class ServiceController:
             # Increment message counter
             with self.lock:
                 self.message_count += 1
-                logger.info(f"Message #{self.message_count} received")
+                logger.debug(f"Message #{self.message_count} received")
 
             # Check hostname
             if msg_json.get('hostname'):
-                logger.info(f"Message hostname: {msg_json['hostname']}")
-                logger.info(f"Local hostname: {socket.gethostname()}")
+                logger.debug(f"Message hostname: {msg_json['hostname']}")
+                logger.debug(f"Local hostname: {socket.gethostname()}")
                 if msg_json['hostname'] != socket.gethostname():
-                    logger.info(f"Message not for this host: {msg_json['hostname']}")
+                    logger.debug(f"Message not for this host: {msg_json['hostname']}")
                     return
             else:
                 logger.warning("No hostname in message")
                 return
 
-            # Handle command execution
-            if msg_json.get('command'):
-                logger.info("Processing command...")
-                self._execute_command(msg_json['command'])
-
-            # Handle service state changes
-            elif msg_json.get('service') and msg_json.get('state') in ['start', 'stop', 'started', 'stopped', 'enable', 'disable', 'enabled', 'disabled']:
+            # Handle service state changes for enable/disable commands only
+            if msg_json.get('service') and msg_json.get('state') in ['enable', 'disable', 'enabled', 'disabled']:
                 service = msg_json['service']
 
                 # Convert state to command format for internal processing
-                # If we receive "started" or "stopped", convert to "start" or "stop" for command execution
                 # If we receive "enabled" or "disabled", convert to "enable" or "disable" for command execution
                 state = msg_json['state']
-                if msg_json['state'] == 'started':
-                    state = 'start'
-                elif msg_json['state'] == 'stopped':
-                    state = 'stop'
-                elif msg_json['state'] == 'enabled':
+                if msg_json['state'] == 'enabled':
                     state = 'enable'
                 elif msg_json['state'] == 'disabled':
                     state = 'disable'
 
-                logger.info(f"Processing service state change: {service} -> {state}")
+                logger.info(f"Processing service enable/disable state change: {service} -> {state}")
 
                 # Update service state - always set changed to True for new commands
                 with self.lock:
@@ -236,8 +227,12 @@ class ServiceController:
                 # Immediately check and apply the new state
                 self.check_systemd_status(client)
             else:
-                logger.info("Message doesn't match expected format")
-                logger.info("Message keys: " + str(msg_json.keys()) if isinstance(msg_json, dict) else "Not a dict")
+                # Filter out messages that don't match our expected format
+                if msg_json.get('service') and msg_json.get('state') not in ['enable', 'disable', 'enabled', 'disabled']:
+                    pass
+                else:
+                    logger.info("Message doesn't match expected format")
+                    logger.info("Message keys: " + str(msg_json.keys()) if isinstance(msg_json, dict) else "Not a dict")
 
         def on_log(client, userdata, level, buf):
             if self.debug:
@@ -268,17 +263,6 @@ class ServiceController:
                 logger.warning(f"MQTT connection failed, will retry")
                 return None
 
-    def _execute_command(self, command: str):
-        """Execute a shell command and log results with error handling"""
-        try:
-            logger.info(f"Executing command: {command}")
-            out, err, rc = self.run_cmd(shlex.split(command))
-            logger.info(f"Command result - rc={rc}, out={out.decode()[:100]}..., err={err.decode()[:100]}...")
-            return True
-        except Exception as e:
-            logger.error(f"Command execution failed: {e}")
-            return False
-
     def run_cmd(self, cmd: list) -> Tuple[bytes, bytes, int]:
         """Execute a command and return output, error, and return code with comprehensive error handling"""
         try:
@@ -296,29 +280,6 @@ class ServiceController:
         except Exception as e:
             logger.error("Command execution failed: %s", e)
             return b'', b'', 1
-
-    def _get_systemd_status(self, service: str) -> Tuple[bool, int]:
-        """Get systemd status for a service (True = active, False = inactive) with error handling"""
-        systemd_command = ["/usr/bin/systemctl", "is-active", "--quiet", service]
-        try:
-            if self.debug:
-                logger.debug(f"Checking systemd status for {service}")
-            child = Popen(systemd_command, stdout=PIPE, stderr=PIPE)
-            out, err = child.communicate()
-            rc = child.returncode
-
-            # systemctl is-active --quiet returns:
-            # 0 = active
-            # 1 = inactive
-            # 3 = failed
-            # We consider 1 and 3 as "inactive"
-            is_active = (rc == 0)
-            if self.debug:
-                logger.debug(f"Systemd status for {service}: rc={rc}, is_active={is_active}")
-            return is_active, rc
-        except Exception as e:
-            logger.error("Failed to get systemd status for %s: %s", service, e)
-            return False, 1
 
     def _get_systemd_enabled_status(self, service: str) -> Tuple[bool, int]:
         """Get systemd enabled status for a service (True = enabled, False = disabled) with error handling"""
@@ -343,7 +304,7 @@ class ServiceController:
             return False, 1
 
     def check_systemd_status(self, client: mqtt_client.Client):
-        """Check systemd status and apply desired state changes with enhanced error handling"""
+        """Check systemd status and apply desired enable/disable state changes with enhanced error handling"""
         for service in list(self.services.keys()):
             # Skip services that don't have any topics associated with them
             # This is a safety check, but should not be needed with our initialization
@@ -397,34 +358,9 @@ class ServiceController:
                         self.changed[service] = False
                     if self.debug:
                         logger.info(f"Service {service} already disabled, no action needed")
-            else:
-                # Check current systemd status for start/stop commands
-                is_active, rc = self._get_systemd_status(service)
-                if self.debug:
-                    logger.debug(f"Systemd status for {service}: rc={rc}, is_active={is_active}")
-
-                # Apply desired state based on systemd status
-                if is_active and desired_state == 'stop':
-                    # Service is running, should be stopped
-                    self._apply_service_state(client, service, 'stop', topic)
-                elif not is_active and desired_state == 'start':
-                    # Service is stopped, should be started
-                    self._apply_service_state(client, service, 'start', topic)
-                elif is_active and desired_state == 'start':
-                    # Service is already running
-                    with self.lock:
-                        self.changed[service] = False
-                    if self.debug:
-                        logger.info(f"Service {service} already running, no action needed")
-                elif not is_active and desired_state == 'stop':
-                    # Service is already stopped
-                    with self.lock:
-                        self.changed[service] = False
-                    if self.debug:
-                        logger.info(f"Service {service} already stopped, no action needed")
 
     def _apply_service_state(self, client: mqtt_client.Client, service: str, desired_state: str, topic: str):
-        """Apply the desired service state with enhanced error handling"""
+        """Apply the desired service enable/disable state with enhanced error handling"""
         # For enable/disable commands, we need to check current enabled status first
         if desired_state in ['enable', 'disable']:
             is_enabled, rc = self._get_systemd_enabled_status(service)
@@ -460,9 +396,7 @@ class ServiceController:
             self.changed[service] = False
 
         # Publish status update
-        if desired_state in ['start', 'stop']:
-            state = "started" if desired_state == "start" else "stopped"
-        elif desired_state in ['enable', 'disable']:
+        if desired_state in ['enable', 'disable']:
             state = "enabled" if desired_state == "enable" else "disabled"
         else:
             state = desired_state
@@ -510,8 +444,8 @@ class ServiceController:
                 topic = f'default/systemd/{service}'
 
             # Get current systemd status
-            is_active, rc = self._get_systemd_status(service)
-            current_state = "started" if is_active else "stopped"
+            is_enabled, rc = self._get_systemd_enabled_status(service)
+            current_state = "enabled" if is_enabled else "disabled"
 
             # Only publish if state has changed
             with self.lock:
@@ -550,8 +484,8 @@ class ServiceController:
                 topic = f'picam/systemd/{service}'
 
             # Get current systemd status
-            is_active, rc = self._get_systemd_status(service)
-            current_state = "started" if is_active else "stopped"
+            is_enabled, rc = self._get_systemd_enabled_status(service)
+            current_state = "enabled" if is_enabled else "disabled"
 
             # Check if manual change occurred
             with self.lock:
@@ -663,9 +597,10 @@ def main():
 
     global logger
     logger = setup_logging(debug, log_file)
+    logger.info("Starting Enable/Disable Controller")
 
     try:
-        controller = ServiceController(debug, log_file)
+        controller = EnableDisableController(debug, log_file)
         controller.run()
     except Exception as e:
         logger.error(f"Fatal error in main: {e}")

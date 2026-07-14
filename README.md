@@ -2,6 +2,14 @@
 
 An enhanced MQTT-based systemd service controller that manages systemd services through MQTT commands with robust error handling, race condition protection, and polling mechanisms.
 
+## Architecture
+
+The system is split into two specialized controllers to better manage different types of operations:
+
+1. **Start/Stop Controller** (`mqtt_systemd_start_stop.py`) - Handles start/stop commands for systemd services
+2. **Enable/Disable Controller** (`mqtt_systemd_enable_disable.py`) - Handles enable/disable commands for systemd services
+3. **Parallel Launcher** (`run_parallel_controllers.py`) - Runs both controllers in parallel threads
+
 ## Features
 
 - **MQTT Integration**: Connects to MQTT broker (version 2 API) to receive service control commands
@@ -12,6 +20,7 @@ An enhanced MQTT-based systemd service controller that manages systemd services 
 - **Error Recovery**: Comprehensive error handling and retry mechanisms
 - **Thread Safety**: Proper synchronization for concurrent operations
 - **Configurable**: Environment-based configuration for flexibility
+- **Dual Controller Architecture**: Separate controllers for different types of operations
 
 ## Requirements
 
@@ -54,8 +63,23 @@ Set the following environment variables:
 
 ## Usage
 
+### Running Individual Controllers
+
+To run the start/stop controller:
 ```bash
-uv run mqtt_systemd_controller.py [--debug] [--log-file /path/to/logfile]
+python mqtt_systemd_start_stop.py [--debug] [--log-file /path/to/logfile]
+```
+
+To run the enable/disable controller:
+```bash
+python mqtt_systemd_enable_disable.py [--debug] [--log-file /path/to/logfile]
+```
+
+### Running Both Controllers in Parallel
+
+To run both controllers in parallel:
+```bash
+python run_parallel_controllers.py [--debug]
 ```
 
 ## Message Format
@@ -85,7 +109,7 @@ To control a service named `bluetooth` (using the default topic):
 
 ```bash
 # Subscribe to topic
-MQTT_TOPIC="default/systemd/bluetooth" uv run mqtt_systemd_controller.py
+MQTT_TOPIC="default/systemd/bluetooth" python mqtt_systemd_start_stop.py
 
 # Send command to start service
 mosquitto_pub -h broker -u user -P pass -t "default/systemd/bluetooth" -m '{"hostname": "your-hostname", "service": "bluetooth", "state": "start"}'

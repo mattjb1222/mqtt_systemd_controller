@@ -9,16 +9,16 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    import mqtt_systemd_controller
-    print("SUCCESS: Successfully imported mqtt_systemd_controller")
+    import mqtt_systemd_start_stop
+    print("SUCCESS: Successfully imported mqtt_systemd_start_stop")
 
-    # Test that we can access the ServiceController class
-    from mqtt_systemd_controller import ServiceController
+    # Test that we can access the StartStopController class
+    from mqtt_systemd_start_stop import StartStopController
     print("SUCCESS: Successfully imported ServiceController")
 
     # Test instantiation with minimal configuration
-    controller = ServiceController(debug=False)
-    print("SUCCESS: Successfully instantiated ServiceController")
+    controller = StartStopController(debug=False)
+    print("SUCCESS: Successfully instantiated StartStopController")
 
     print("All tests passed!")
 
